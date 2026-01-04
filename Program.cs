@@ -19,22 +19,25 @@ namespace Mindustry_Compiler
         {
             public string text { get; }
             public VariableToken(string text) { this.text = text; }
+            public override string ToString() => text;
         }
         internal struct KeywordToken : Token
         {
             public string text { get; }
             public KeywordToken(string text) { this.text = text; }
+            public override string ToString() => text;
         }
         internal struct OperationToken : Token
         {
             public string text { get; }
             public OperationToken(string text) { this.text = text; }
+            public override string ToString() => text;
         }
         internal struct ValueToken : Token
         {
             public string text { get; }
             public ValueToken(string text) { this.text = text; }
-
+            public override string ToString() => text;
         }
         #endregion
 
@@ -49,13 +52,28 @@ namespace Mindustry_Compiler
             Token[][] tokenSequences = SyntaxicalAnalysis(textSegments);
             string outputCode = CodeGeneration(tokenSequences);
 
-            Console.WriteLine($"Code: \n\n{outputCode}");
+            //Console.WriteLine($"Code: \n\n{GetNumberedCode(outputCode)}");
+            Console.WriteLine($"Code: \n\n{(outputCode)}");
+        }
+
+        private static string GetNumberedCode(string initialCode)
+        {
+            string[] lines = initialCode.Split('\n')[..^1];
+            int maxNumLength = (lines.Length - 1).ToString().Length;
+
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                builder.AppendLine($"{(i).ToString().PadRight(maxNumLength)}. {line}");
+            }
+            return builder.ToString();
         }
 
 
         #region Lexical Constants
-        private static readonly Regex lexicalRegex = new Regex(@"((?:"".*?"")|(?:[a-zA-Z]\w*[;: ()]*)|(?:[=<>\.\+\-/\*\^]+ ?)|(?:\d+[;: ()]*))", RegexOptions.Compiled);
-        private static readonly char[] tokenEndings = new char[] { ';', ':' };
+        private static readonly Regex lexicalRegex = new Regex(@"((?:"".*?"")|(?:[a-zA-Z]\w*[;: ()]?)|(?:[=<>\.\+\-/\*\^]+ ?)|(?:\d+[;: ()]?))", RegexOptions.Compiled);
+        private static readonly char[] tokenEndings = new char[] { ';', ':', ')' };
         const bool displaySequences = false;
         #endregion
         private static List<List<string>> LexicalAnalysis(string code)
@@ -98,11 +116,11 @@ namespace Mindustry_Compiler
 
 
         #region Syntaxical Constants
-        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "print(" };
+        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "for", "endfor", "while", "endwhile", "print(" };
         private static readonly string[] operators = new string[] { "<", "=", "==", ">", "<=", ">=", ".", "+", "-", "*", "/", "^" };
         private static readonly Regex variableMatcher = new Regex(@"[a-zA-Z]\w*[;: ()]*", RegexOptions.Compiled);
         private static readonly Regex valueMatcher = new Regex(@"\d+", RegexOptions.Compiled);
-        const bool displayTokenTypes = false;
+        const bool displayTokenTypes = true;
         #endregion
         private static Token[][] SyntaxicalAnalysis(List<List<string>> textSegments)
         {
@@ -161,6 +179,7 @@ namespace Mindustry_Compiler
             List<string> outputCode = new List<string>();
 
             Stack<int> ifTargetStack = new Stack<int>();
+            Stack<int> forTargetStack = new Stack<int>();
 
             /*
             
@@ -170,7 +189,7 @@ namespace Mindustry_Compiler
             */
             foreach (Token[] section in tokens)
             {
-                if (section.Length <= 1) { throw new Exception("Invalid quantity of tokens."); }
+                if (section.Length == 0) { throw new Exception("Invalid quantity of tokens."); }
 
                 if (section[0] is VariableToken)
                 {
@@ -220,7 +239,51 @@ namespace Mindustry_Compiler
                 {
                     if (section[0].text == "if")
                     {
+                        // should then go if variable/value operator variable/value
+                        if (section.Length != 4) { throw new Exception("Invalid if statement syntax. Required : {if value operator value}"); }
 
+                        
+
+                        if (!arithmeticOperands.ContainsKey(section[2].text)) { throw new Exception($"Operator {{{section[2].text}}} not recognised."); }
+
+                        outputCode.Add($"jump {outputCode.Count + 2} {arithmeticOperands[section[2].text]} {section[1].text} {section[3].text}");
+
+                        ifTargetStack.Push(outputCode.Count); // will target this jump line
+                        outputCode.Add("jump - always");
+                    }
+                    if (section[0].text == "endif")
+                    {
+                        int target = ifTargetStack.Pop();
+                        outputCode[target] = outputCode[target].Replace("-", outputCode.Count.ToString());
+                    }
+
+                    if (section[0].text == "for")
+                    {
+                        outputCode.Add($"set {section[1]} {section[3]}");
+                        outputCode.Add($"jump {outputCode.Count + 2} always");
+                        if (section.Length > 8)
+                        {
+                            outputCode.Add(GetOperandText(section[9], section[11], section[13], section[12]));
+                        }
+                        else
+                        {
+                            outputCode.Add($"op add {section[1]} {section[1]} 1");
+                        }
+                        outputCode.Add(GetOperandText(new VariableToken("compilerForLoopJumpChecker"), section[5], section[7], section[6]));
+                        forTargetStack.Push(outputCode.Count);
+                        outputCode.Add($"jump - equal compilerForLoopJumpChecker false");
+                    }
+                    if (section[0].text == "endfor")
+                    {
+                        int target = forTargetStack.Pop();
+                        outputCode[target] = outputCode[target].Replace("-", (outputCode.Count + 1).ToString());
+                        outputCode.Add($"jump {target - 2} always");
+                    }
+
+                    if (section[0].text == "print(")
+                    {
+                        outputCode.Add($"print {section[1]}");
+                        outputCode.Add($"printflush {section[2]}");
                     }
                 }
             }
@@ -231,6 +294,7 @@ namespace Mindustry_Compiler
             {
                 builder.AppendLine(line);
             }
+            builder.AppendLine("end");
             return builder.ToString();
         }
 
@@ -245,6 +309,8 @@ namespace Mindustry_Compiler
             { "*", "mul" },
             { "/", "div" },
             { "^", "pow" },
+            { ">=", "greaterThanEq" },
+            { "<=", "lessThanEq" },
         };
         private static string GetOperandText(Token output, Token in1, Token in2, Token opToken)
         {
@@ -280,19 +346,10 @@ namespace Mindustry_Compiler
 
         private static void Main()
         {
-            Compile("""
-                
-                powerIn = battery1.powerNetIn;
-                powerOut = battery1.powerNetOut;
-                otherTest = 0;
-                otherTest = 2 + 3 + 5 + 6;
-                if powerIn < powerOut:
-                   	diode.enabled = false;
-
-                def printTest:
-                   	print("frog", message1);
-                
-                """);
+            string code;
+            if (File.Exists("code.txt")) { code = File.ReadAllText("code.txt"); }
+            else { code = File.ReadAllText("..\\..\\..\\code.txt"); }
+            Compile(code);
         }
 
 
