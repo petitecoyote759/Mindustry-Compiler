@@ -41,6 +41,13 @@ namespace Mindustry_Compiler
         }
         #endregion
 
+        internal class Function
+        {
+            public int pointer;
+            public List<string> code;
+            public string name;
+        }
+
 
 
 
@@ -52,7 +59,7 @@ namespace Mindustry_Compiler
             Token[][] tokenSequences = SyntaxicalAnalysis(textSegments);
             string outputCode = CodeGeneration(tokenSequences);
 
-            //Console.WriteLine($"Code: \n\n{GetNumberedCode(outputCode)}");
+            Console.WriteLine($"Code: \n\n{GetNumberedCode(outputCode)}\n\n\n");
             Console.WriteLine($"Code: \n\n{(outputCode)}");
         }
 
@@ -69,6 +76,13 @@ namespace Mindustry_Compiler
             }
             return builder.ToString();
         }
+
+
+
+
+
+
+
 
 
         #region Lexical Constants
@@ -116,11 +130,11 @@ namespace Mindustry_Compiler
 
 
         #region Syntaxical Constants
-        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "for", "endfor", "while", "endwhile", "print(" };
+        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "for", "endfor", "while", "endwhile", "print(", "call" };
         private static readonly string[] operators = new string[] { "<", "=", "==", ">", "<=", ">=", ".", "+", "-", "*", "/", "^" };
         private static readonly Regex variableMatcher = new Regex(@"[a-zA-Z]\w*[;: ()]*", RegexOptions.Compiled);
         private static readonly Regex valueMatcher = new Regex(@"\d+", RegexOptions.Compiled);
-        const bool displayTokenTypes = true;
+        const bool displayTokenTypes = false;
         #endregion
         private static Token[][] SyntaxicalAnalysis(List<List<string>> textSegments)
         {
@@ -176,10 +190,13 @@ namespace Mindustry_Compiler
         #endregion
         private static string CodeGeneration(Token[][] tokens)
         {
+            List<string> hiddenOutputCode = new List<string>();
             List<string> outputCode = new List<string>();
+            Dictionary<string, Function> functionCode = new Dictionary<string, Function>();
 
             Stack<int> ifTargetStack = new Stack<int>();
             Stack<int> forTargetStack = new Stack<int>();
+            Stack<Tuple<int, string>> whileTargetStack = new Stack<Tuple<int, string>>();
 
             /*
             
@@ -280,10 +297,39 @@ namespace Mindustry_Compiler
                         outputCode.Add($"jump {target - 2} always");
                     }
 
+                    if (section[0].text == "while")
+                    {
+                        whileTargetStack.Push(new Tuple<int, string>(outputCode.Count, GetOperandText(new VariableToken("compilerWhileLoopJumpChecker"), section[1], section[3], section[2])));
+                    }
+                    if (section[0].text == "endwhile")
+                    {
+                        Tuple<int, string> target = whileTargetStack.Pop();
+                        outputCode.Add(target.Item2);
+                        outputCode.Add($"jump {target.Item1} equal compilerWhileLoopJumpChecker false");
+                    }
+
                     if (section[0].text == "print(")
                     {
                         outputCode.Add($"print {section[1]}");
                         outputCode.Add($"printflush {section[2]}");
+                    }
+
+                    if (section[0].text == "def")
+                    {
+                        outputCode.Add("end");
+                        functionCode.Add(section[1].text, new Function() { name = section[1].text, pointer = outputCode.Count });
+                        hiddenOutputCode = new List<string>(outputCode);
+                    }
+                    if (section[0].text == "enddef")
+                    {
+                        outputCode.Add("set @counter compilerReturnAddress");
+                        functionCode[functionCode.Last().Key].code = outputCode[hiddenOutputCode.Count..];
+                        outputCode = hiddenOutputCode;
+                    }
+                    if (section[0].text == "call")
+                    {
+                        outputCode.Add($"set compilerReturnAddress {outputCode.Count + 2}");
+                        outputCode.Add($"FUNCTION CALL TO {section[1]}");
                     }
                 }
             }
@@ -292,9 +338,20 @@ namespace Mindustry_Compiler
             StringBuilder builder = new StringBuilder();
             foreach (string line in outputCode)
             {
-                builder.AppendLine(line);
+                if (line.StartsWith("FUNCTION CALL TO "))
+                {
+                    builder.AppendLine($"jump {functionCode[line.Replace("FUNCTION CALL TO ", "")].pointer} always");
+                }
+                else { builder.AppendLine(line); }
             }
-            builder.AppendLine("end");
+            foreach (KeyValuePair<string, Function> function in functionCode)
+            {
+                foreach (string line in function.Value.code)
+                {
+                    builder.AppendLine(line);
+                }
+                builder.AppendLine("end");
+            }
             return builder.ToString();
         }
 
