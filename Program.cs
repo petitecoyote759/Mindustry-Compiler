@@ -1,4 +1,5 @@
-﻿using System.Reflection.Emit;
+﻿using System.ComponentModel;
+using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -39,6 +40,7 @@ namespace Mindustry_Compiler
             public ValueToken(string text) { this.text = text; }
             public override string ToString() => text;
         }
+
         #endregion
 
         internal class Function
@@ -86,7 +88,7 @@ namespace Mindustry_Compiler
 
 
         #region Lexical Constants
-        private static readonly Regex lexicalRegex = new Regex(@"((?:"".*?"")|(?:[a-zA-Z]\w*[;: ()]?)|(?:[=<>\.\+\-/\*\^]+ ?)|(?:\d+[;: ()]?))", RegexOptions.Compiled);
+        private static readonly Regex lexicalRegex = new Regex(@"((?:"".*?""[;: ()]?)|(?:[a-zA-Z]\w*[;: ()]?)|(?:[=<>\.\+\-/\*\^]+ ?)|(?:\d+[;: ()]?))", RegexOptions.Compiled);
         private static readonly char[] tokenEndings = new char[] { ';', ':', ')' };
         const bool displaySequences = false;
         #endregion
@@ -104,6 +106,7 @@ namespace Mindustry_Compiler
             {
                 string currentToken = tokens[i].Trim();
 
+                if (currentToken.EndsWith('(')) { currentToken = currentToken[..^1]; }
                 
                 if (tokenEndings.Any(currentToken.EndsWith)) // if the current token ends with any of the endings, means end of sequence
                 {
@@ -130,7 +133,7 @@ namespace Mindustry_Compiler
 
 
         #region Syntaxical Constants
-        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "for", "endfor", "while", "endwhile", "print(", "call" };
+        private static readonly string[] keywords = new string[] { "if", "endif", "def", "enddef", "for", "endfor", "while", "endwhile", "print", "call" };
         private static readonly string[] operators = new string[] { "<", "=", "==", ">", "<=", ">=", ".", "+", "-", "*", "/", "^" };
         private static readonly Regex variableMatcher = new Regex(@"[a-zA-Z]\w*[;: ()]*", RegexOptions.Compiled);
         private static readonly Regex valueMatcher = new Regex(@"\d+", RegexOptions.Compiled);
@@ -197,6 +200,10 @@ namespace Mindustry_Compiler
             Stack<int> ifTargetStack = new Stack<int>();
             Stack<int> forTargetStack = new Stack<int>();
             Stack<Tuple<int, string>> whileTargetStack = new Stack<Tuple<int, string>>();
+
+
+            outputCode.Add("set paramStackPointer 0");
+            outputCode.Add("set pointerStackPointer 0");
 
             /*
             
@@ -308,7 +315,7 @@ namespace Mindustry_Compiler
                         outputCode.Add($"jump {target.Item1} equal compilerWhileLoopJumpChecker false");
                     }
 
-                    if (section[0].text == "print(")
+                    if (section[0].text == "print")
                     {
                         outputCode.Add($"print {section[1]}");
                         outputCode.Add($"printflush {section[2]}");
@@ -319,28 +326,36 @@ namespace Mindustry_Compiler
                         outputCode.Add("end");
                         functionCode.Add(section[1].text, new Function() { name = section[1].text, pointer = outputCode.Count });
                         hiddenOutputCode = new List<string>(outputCode);
+                        // goes def function a b c
+                        for (int i = section.Length - 1; i > 1; i--)
+                        {
+                            outputCode.Add($"op sub paramStackPointer paramStackPointer 1");
+                            outputCode.Add($"read {section[i]} cell1 paramStackPointer");
+                        }
                     }
                     if (section[0].text == "enddef")
                     {
-                        outputCode.Add("set @counter compilerReturnAddress");
+                        outputCode.Add($"op sub pointerStackPointer pointerStackPointer 1");
+                        outputCode.Add($"read compilerReturnPointer cell2 pointerStackPointer");
+                        outputCode.Add("set @counter compilerReturnPointer");
                         functionCode[functionCode.Last().Key].code = outputCode[hiddenOutputCode.Count..];
                         outputCode = hiddenOutputCode;
                     }
                     if (section[0].text == "call")
                     {
-                        outputCode.Add($"set compilerReturnAddress {outputCode.Count + 2}");
-                        outputCode.Add($"FUNCTION CALL TO {section[1]}");
+                        outputCode = outputCode.Concat(GetFunctionCallText($"{section[1]} {String.Join(' ', (object?[])section[2..])}", outputCode.Count)).ToList();
                     }
                 }
             }
 
 
             StringBuilder builder = new StringBuilder();
+
             foreach (string line in outputCode)
             {
-                if (line.StartsWith("FUNCTION CALL TO "))
+                if (line.StartsWith("FunctionCallTo "))
                 {
-                    builder.AppendLine($"jump {functionCode[line.Replace("FUNCTION CALL TO ", "")].pointer} always");
+                    builder.AppendLine($"jump {functionCode[line.Replace("FunctionCallTo ", "")].pointer} always");
                 }
                 else { builder.AppendLine(line); }
             }
@@ -354,6 +369,32 @@ namespace Mindustry_Compiler
             }
             return builder.ToString();
         }
+
+
+
+
+        private static List<string> GetFunctionCallText(string line, int mainCodeLength)
+        {
+            List<string> outputCode = new List<string>();
+            string[] sections = line.Split(' '); // goes FunctionCallTo FunctionName param1 param2 param3...
+
+            for (int i = 1; i < sections.Length; i++)
+            {
+                outputCode.Add($"write {sections[i]} cell1 paramStackPointer");
+                outputCode.Add($"op add paramStackPointer paramStackPointer 1");
+            }
+
+            outputCode.Add($"write { outputCode.Count + 3 + mainCodeLength } cell2 pointerStackPointer");
+            outputCode.Add($"op add pointerStackPointer pointerStackPointer 1");
+
+            outputCode.Add($"FunctionCallTo {sections[0]}");
+
+            return outputCode;
+        }
+
+
+
+
 
 
         private static readonly Dictionary<string, string> arithmeticOperands = new Dictionary<string, string>()

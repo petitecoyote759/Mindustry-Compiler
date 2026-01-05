@@ -1,14 +1,12 @@
-﻿input = 1;
-call doubleNum;
-print(input, message1);
-call doubleNum;
-print(input, message2);
-call doubleNum;
-print(input, message3);
-call doubleNum;
-print(input, message4);
+﻿print("test", message4)
 
-def doubleNum:
-	input = input * 2;
+test = 7;
+hello = 13;
+
+call Function(test, hello, 3);
+
+def Function(a, b, c):
+	print(a, message1);
+	print(b, message2);
+	print(c, message3);
 enddef;
-
